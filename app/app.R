@@ -94,8 +94,12 @@ server <- function(input, output, session) {
     mse <- sse/(n-2)
     res_std_error <- sqrt(mse)
     
+    # Get model summary for additional statistics
+    model_summary <- summary(model)
+    
     list(
       model = model,
+      summary = model_summary,
       sse = sse,
       ssr = ssr,
       ssto = ssto,
@@ -106,7 +110,8 @@ server <- function(input, output, session) {
       y = y,
       y_hat = y_hat,
       y_mean = y_mean,
-      residuals = residuals
+      residuals = residuals,
+      n = n
     )
   })
   
@@ -179,6 +184,30 @@ server <- function(input, output, session) {
     
     p
   })
+  
+  output$stats_table <- renderTable({
+    res <- model_results()
+    
+    # Create statistics table with only the specified metrics
+    data.frame(
+      Statistic = c(
+        "SSE (Sum of Squared Errors)",
+        "SSR (Sum of Squares Regression)",
+        "SSTO (Total Sum of Squares)",
+        "R²",
+        "MSE (Mean Squared Error)",
+        "Residual Standard Error"
+      ),
+      Value = c(
+        res$sse,         # SSE
+        res$ssr,         # SSR
+        res$ssto,        # SSTO
+        res$r_squared,   # R-squared
+        res$mse,         # MSE
+        res$res_std_error # Residual Standard Error
+      )
+    )
+  }, digits = 4)
   
   output$r_code <- renderText({
     res <- model_results()
