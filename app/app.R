@@ -113,6 +113,10 @@ server <- function(input, output, session) {
   output$scatter_plot <- renderPlot({
     res <- model_results()
     
+    # Create data frame for predictions
+    new_x <- data.frame(x = seq(min(res$x), max(res$x), length.out = 100))
+    predicted <- predict(res$model, newdata = data.frame(x = new_x$x))
+    
     # Base plot
     p <- ggplot(data.frame(x = res$x, y = res$y), aes(x = x, y = y)) +
       theme_minimal(base_size = 14) +
@@ -148,8 +152,11 @@ server <- function(input, output, session) {
                           linetype = "dashed", linewidth = 1)
     }
     
-    # Add regression line and points
-    p <- p + geom_smooth(method = "lm", se = FALSE, color = "blue", linewidth = 1) +
+    # Add regression line using predicted values
+    p <- p + geom_line(data = data.frame(x = new_x$x, y = predicted), 
+                       aes(x = x, y = y), 
+                       color = "blue", 
+                       linewidth = 1) +
       geom_point(size = 3)
     
     # Add fitted points if selected
@@ -171,21 +178,6 @@ server <- function(input, output, session) {
     }
     
     p
-  })
-  
-  output$stats_table <- renderTable({
-    res <- model_results()
-    data.frame(
-      Statistic = c("SSE", "SSR", "SSTO", "R-squared", "MSE", "Residual Std Error"),
-      Value = round(c(
-        res$sse,
-        res$ssr,
-        res$ssto,
-        res$r_squared,
-        res$mse,
-        res$res_std_error
-      ), 4)
-    )
   })
   
   output$r_code <- renderText({
