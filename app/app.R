@@ -2,6 +2,10 @@ library(shiny)
 library(bslib)
 library(tidyverse)
 
+library(shiny)
+library(bslib)
+library(tidyverse)
+
 ui <- page_navbar(
   title = "Regression Statistics Calculator",
   theme = bs_theme(bootswatch = "flatly"),
@@ -18,7 +22,8 @@ ui <- page_navbar(
                                      "Mean Line" = "mean_line",
                                      "Fitted Values" = "fitted",
                                      "SSE Components" = "sse",
-                                     "SSR Components" = "ssr"
+                                     "SSR Components" = "ssr",
+                                     "RSE Bands" = "rse_bands"
                                    ),
                                    selected = "residuals"
                 )
@@ -29,9 +34,33 @@ ui <- page_navbar(
                   card_header("Scatter Plot with Regression Line"),
                   plotOutput("scatter_plot", height = "500px")
                 ),
-                card(
-                  card_header("Statistical Results"),
-                  tableOutput("stats_table")
+                layout_columns(
+                  card(
+                    card_header("Error Statistics"),
+                    card_body(
+                      tooltip(
+                        span(
+                          "RSE:",
+                          textOutput("rse_value", inline = TRUE)
+                        ),
+                        "Residual Standard Error: A measure of the average deviation of observations from the regression line"
+                      ),
+                      tooltip(
+                        span(
+                          "MSE:",
+                          textOutput("mse_value", inline = TRUE)
+                        ),
+                        "Mean Squared Error: The average squared difference between observed and predicted values"
+                      ),
+                      br(),
+                      h5("Residuals Breakdown:"),
+                      tableOutput("residuals_table")
+                    )
+                  ),
+                  card(
+                    card_header("Statistical Results"),
+                    tableOutput("stats_table")
+                  )
                 )
               )
             )
@@ -48,14 +77,15 @@ ui <- page_navbar(
           <li>SSR (Sum of Squares Regression) = Σ(ŷ<sub>i</sub> - ȳ)²</li>
           <li>SSTO (Total Sum of Squares) = Σ(y<sub>i</sub> - ȳ)²</li>
           <li>R² = SSR/SSTO = 1 - SSE/SSTO</li>
-          <li>MSE (Mean Squared Error) = SSE/(n-2)</li>
-          <li>Residual Standard Error = √MSE</li>
+          <li><strong>MSE (Mean Squared Error) = SSE/(n-2)</strong></li>
+          <li><strong>Residual Standard Error = √MSE</strong></li>
         </ul>
       "),
               verbatimTextOutput("r_code")
             )
   )
 )
+
 
 server <- function(input, output, session) {
   data <- reactive({
@@ -75,31 +105,35 @@ server <- function(input, output, session) {
     x <- data()[[input$x_var]]
     y <- data()[[input$y_var]]
     
-    # Fit model
-    model <- lm(y ~ x)
+    validate(
+      need(!is.null(x) && !is.null(y), "Please select both X and Y variables"),
+      need(all(is.finite(x)), "X variable contains non-finite values"),
+      need(all(is.finite(y)), "Y variable contains non-finite values")
+    )
     
-    # Calculate components
+    model_data <- data.frame(y = y, x = x)
+    model <- try(lm(y ~ x, data = model_data), silent = TRUE)
+    
+    if (inherits(model, "try-error")) {
+      return(NULL)
+    }
+    
     y_hat <- fitted(model)
     residuals <- residuals(model)
     y_mean <- mean(y)
     
-    # Calculate sums of squares
     sse <- sum(residuals^2)
     ssr <- sum((y_hat - y_mean)^2)
     ssto <- sum((y - y_mean)^2)
     
-    # Calculate other statistics
     r_squared <- ssr/ssto
     n <- length(y)
     mse <- sse/(n-2)
     res_std_error <- sqrt(mse)
     
-    # Get model summary for additional statistics
-    model_summary <- summary(model)
-    
     list(
       model = model,
-      summary = model_summary,
+      summary = summary(model),
       sse = sse,
       ssr = ssr,
       ssto = ssto,
@@ -116,79 +150,140 @@ server <- function(input, output, session) {
   })
   
   output$scatter_plot <- renderPlot({
-    res <- model_results()
+    req(input$x_var, input$y_var)
+    res <- req(model_results())
+    validate(need(!is.null(res), "Unable to create plot: model fitting failed"))
     
-    # Create data frame for predictions
-    new_x <- data.frame(x = seq(min(res$x), max(res$x), length.out = 100))
-    predicted <- predict(res$model, newdata = data.frame(x = new_x$x))
-    
-    # Base plot
-    p <- ggplot(data.frame(x = res$x, y = res$y), aes(x = x, y = y)) +
-      theme_minimal(base_size = 14) +
-      labs(x = input$x_var, y = input$y_var)
-    
-    # Add SSR components if selected
-    if ("ssr" %in% input$show_elements) {
-      segments_data <- data.frame(
-        x = res$x,
-        y = res$y_hat,
-        yend = res$y_mean
-      )
-      p <- p + geom_segment(data = segments_data,
-                            aes(x = x, y = y, xend = x, yend = yend),
-                            color = "blue", alpha = 0.5, linewidth = 2)
-    }
-    
-    # Add SSE components if selected
-    if ("sse" %in% input$show_elements) {
-      segments_data <- data.frame(
+    tryCatch({
+      plot_data <- data.frame(
         x = res$x,
         y = res$y,
-        yend = res$y_hat
+        y_hat = res$y_hat,
+        residuals = res$residuals
       )
-      p <- p + geom_segment(data = segments_data,
-                            aes(x = x, y = y, xend = x, yend = yend),
-                            color = "red", alpha = 0.5, linewidth = 2)
-    }
-    
-    # Add mean line if selected
-    if ("mean_line" %in% input$show_elements) {
-      p <- p + geom_hline(yintercept = res$y_mean, color = "darkgreen", 
-                          linetype = "dashed", linewidth = 1)
-    }
-    
-    # Add regression line using predicted values
-    p <- p + geom_line(data = data.frame(x = new_x$x, y = predicted), 
-                       aes(x = x, y = y), 
-                       color = "blue", 
-                       linewidth = 1) +
-      geom_point(size = 3)
-    
-    # Add fitted points if selected
-    if ("fitted" %in% input$show_elements) {
-      p <- p + geom_point(aes(y = res$y_hat), color = "blue", size = 3, shape = 1)
-    }
-    
-    # Add residuals if selected
-    if ("residuals" %in% input$show_elements) {
-      segments_data <- data.frame(
-        x = res$x,
-        y = res$y,
-        xend = res$x,
-        yend = res$y_hat
-      )
-      p <- p + geom_segment(data = segments_data,
-                            aes(x = x, y = y, xend = xend, yend = yend),
-                            color = "red", linetype = "dashed")
-    }
-    
-    p
+      
+      # Initialize base plot
+      p <- ggplot(plot_data, aes(x = x, y = y)) +
+        theme_minimal(base_size = 14) +
+        labs(x = input$x_var, y = input$y_var) +
+        geom_point(size = 3)
+      
+      # Add regression line and bands
+      if ("rse_bands" %in% input$show_elements) {
+        # Use the original x values for prediction
+        new_data <- data.frame(x = res$x)
+        names(new_data) <- input$x_var
+        pred <- predict(res$model, newdata = new_data, interval = "confidence")
+        
+        line_data <- data.frame(
+          x = res$x,
+          fit = pred[,"fit"],
+          lwr = pred[,"lwr"],
+          upr = pred[,"upr"]
+        )
+        
+        p <- p + 
+          geom_ribbon(data = line_data,
+                      aes(x = x, y = fit, ymin = lwr, ymax = upr),
+                      alpha = 0.2,
+                      fill = "blue") +
+          geom_line(data = line_data,
+                    aes(x = x, y = fit),
+                    color = "blue",
+                    linewidth = 1)
+      } else {
+        p <- p + geom_smooth(method = "lm", se = FALSE, color = "blue", linewidth = 1)
+      }
+      
+      if ("mean_line" %in% input$show_elements) {
+        p <- p + geom_hline(yintercept = res$y_mean, 
+                            color = "darkgreen", 
+                            linetype = "dashed")
+      }
+      
+      if ("fitted" %in% input$show_elements) {
+        p <- p + geom_point(aes(y = y_hat), color = "blue", size = 3, shape = 1)
+      }
+      
+      if ("residuals" %in% input$show_elements) {
+        p <- p + geom_segment(aes(x = x, y = y, xend = x, yend = y_hat),
+                              color = "red", linetype = "dashed")
+      }
+      
+      if ("ssr" %in% input$show_elements) {
+        p <- p + geom_segment(aes(x = x, y = y_hat, xend = x, yend = res$y_mean),
+                              color = "blue", alpha = 0.5)
+      }
+      
+      if ("sse" %in% input$show_elements) {
+        p <- p + geom_segment(aes(x = x, y = y, xend = x, yend = y_hat),
+                              color = "red", alpha = 0.5)
+      }
+      
+      if ("mse_components" %in% input$show_elements) {
+        residuals_sq <- res$residuals^2
+        max_residual_sq <- max(residuals_sq)
+        box_width <- diff(range(res$x)) * 0.05
+        
+        squares_data <- data.frame(
+          x = res$x,
+          y = res$y,
+          y_hat = res$y_hat,
+          residual = res$residuals,
+          residual_sq = residuals_sq,
+          box_size = sqrt(residuals_sq/max_residual_sq) * box_width
+        )
+        
+        for(i in seq_len(nrow(squares_data))) {
+          square <- squares_data[i, ]
+          p <- p + 
+            geom_rect(data = square,
+                      aes(xmin = x - box_size/2,
+                          xmax = x + box_size/2,
+                          ymin = y_hat - box_size/2,
+                          ymax = y_hat + box_size/2),
+                      fill = "orange",
+                      alpha = 0.3) +
+            geom_segment(data = square,
+                         aes(x = x, y = y, xend = x, yend = y_hat),
+                         color = "red",
+                         linetype = "dashed") +
+            annotate("text",
+                     x = square$x,
+                     y = square$y_hat,
+                     label = sprintf("%.2f²\n=%.2f", abs(square$residual), square$residual_sq),
+                     size = 3)
+        }
+        
+        p <- p + annotate("text",
+                          x = mean(range(res$x)),
+                          y = max(res$y),
+                          label = sprintf("MSE = Σ(residuals²)/(n-2) = %.2f", res$mse),
+                          size = 4,
+                          fontface = "bold")
+      }
+      
+      p
+      
+    }, error = function(e) {
+      ggplot() + theme_void() + 
+        annotate("text", x = 0, y = 0, label = "Error creating plot")
+    })
   })
+  
+  output$residuals_table <- renderTable({
+    res <- model_results()
+    data.frame(
+      Point = seq_len(length(res$residuals)),
+      `Observed Y` = round(res$y, 4),
+      `Predicted Y` = round(res$y_hat, 4),
+      Residual = round(res$residuals, 4),
+      `Squared Residual` = round(res$residuals^2, 4)
+    )
+  }, digits = 4)
   
   output$stats_table <- renderTable({
     res <- model_results()
-    
-    # Create statistics table with only the specified metrics
     data.frame(
       Statistic = c(
         "SSE (Sum of Squared Errors)",
@@ -199,18 +294,17 @@ server <- function(input, output, session) {
         "Residual Standard Error"
       ),
       Value = c(
-        res$sse,         # SSE
-        res$ssr,         # SSR
-        res$ssto,        # SSTO
-        res$r_squared,   # R-squared
-        res$mse,         # MSE
-        res$res_std_error # Residual Standard Error
+        res$sse,
+        res$ssr,
+        res$ssto,
+        res$r_squared,
+        res$mse,
+        res$res_std_error
       )
     )
   }, digits = 4)
   
   output$r_code <- renderText({
-    res <- model_results()
     sprintf('
 # R code for calculations:
 x <- data$%s
@@ -225,15 +319,17 @@ residuals <- residuals(model)
 y_mean <- mean(y)
 
 # Calculate sums of squares
-SSE <- sum(residuals^2)  # Sum of Squared Errors
-SSR <- sum((y_hat - y_mean)^2)  # Sum of Squares Regression
-SSTO <- sum((y - y_mean)^2)  # Total Sum of Squares
+SSE <- sum(residuals^2)
+SSR <- sum((y_hat - y_mean)^2)
+SSTO <- sum((y - y_mean)^2)
 
-# Calculate other statistics
-R_squared <- SSR/SSTO
+# Calculate R-squared
+R2 <- SSR/SSTO
+
+# Calculate MSE and RSE
 n <- length(y)
-MSE <- SSE/(n-2)  # Mean Squared Error
-Residual_Std_Error <- sqrt(MSE)
+MSE <- SSE/(n-2)
+RSE <- sqrt(MSE)
     ', input$x_var, input$y_var)
   })
 }
